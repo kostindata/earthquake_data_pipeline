@@ -1,2 +1,5 @@
-# earthquake_data_pipeline
-earthquake_data_pipeline
+# Earthquake data pipeline
+
+```bash
+python3.13 -m venv venv
+```
