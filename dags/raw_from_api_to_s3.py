@@ -1,5 +1,4 @@
 import logging
-
 import duckdb
 import pendulum
 from airflow import DAG
