@@ -8,6 +8,13 @@ Airflow.
 Проект предназначен для локальной разработки и демонстрации полного пути
 данных: API → объектное хранилище → ODS → аналитические витрины → BI.
 
+## Результат
+
+В Metabase данные представлены в виде KPI-дашборда с динамикой средней
+магнитуды и количества землетрясений по дням:
+
+![KPI-дашборд землетрясений в Metabase](docs/images/metabase-kpi-dashboard.png)
+
 ## Архитектура
 
 ```mermaid
@@ -25,6 +32,10 @@ flowchart LR
 
 DuckDB используется внутри Python-задач Airflow для чтения CSV/Parquet и
 передачи данных между USGS, MinIO и PostgreSQL.
+
+Граф зависимостей DAG:
+
+![Граф зависимостей DAG в Airflow](docs/images/airflow-dag-dependencies.png)
 
 ### Слои данных
 
