@@ -21,16 +21,13 @@ Airflow.
 
 ```mermaid
 flowchart LR
-    USGS[USGS API] -->|CSV| RAW_DAG[raw_from_api_to_s3]
-    RAW_DAG -->|Parquet| MINIO[(MinIO / prod)]
+    USGS[USGS API] -->|CSV| RAW[raw_from_api_to_s3]
+    RAW -->|Parquet| MINIO[(MinIO / prod)]
     MINIO --> ODS_DAG[raw_from_s3_to_pg]
     ODS_DAG --> ODS[(PostgreSQL / ods)]
-    ODS --> COUNT_DAG[fct_count_day_earthquake]
-    ODS --> AVG_DAG[fct_avg_day_earthquake]
-    COUNT_DAG --> DM[(PostgreSQL / dm)]
-    AVG_DAG --> DM
-    ODS --> METABASE[Metabase]
-    DM -.-> METABASE
+    ODS --> MB[Metabase]
+    ODS --> FCT["fct_count_day_earthquake<br/>fct_avg_day_earthquake"]
+    FCT --> DM[(PostgreSQL / dm)]
 ```
 
 DuckDB используется внутри Python-задач Airflow для чтения CSV/Parquet и
