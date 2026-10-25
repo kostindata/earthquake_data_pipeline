@@ -29,7 +29,8 @@ flowchart LR
     ODS --> AVG_DAG[fct_avg_day_earthquake]
     COUNT_DAG --> DM[(PostgreSQL / dm)]
     AVG_DAG --> DM
-    DM --> METABASE[Metabase]
+    ODS --> METABASE[Metabase]
+    DM -.-> METABASE
 ```
 
 DuckDB используется внутри Python-задач Airflow для чтения CSV/Parquet и
