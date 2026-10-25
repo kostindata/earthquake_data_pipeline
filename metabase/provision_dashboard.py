@@ -35,14 +35,12 @@ DWH_DETAILS = {
 COLLECTION_NAME = "Землетрясения"
 DASHBOARD_NAME = "Землетрясения: обзор"
 
-# ODS хранит всё как varchar, поэтому приводим типы здесь. Фильтры по датам —
-# необязательные блоки [[ ]]: без значения фильтра они выпадают из запроса.
-SRC = """
-FROM ods.fct_earthquake
-WHERE type = 'earthquake'
-  AND NULLIF(mag, '') IS NOT NULL
-  [[AND left(time, 10)::date >= {{date_from}}]]
-  [[AND left(time, 10)::date <= {{date_to}}]]
+# Карточки читают витрины dm. Фильтры по датам — необязательные блоки [[ ]]:
+# без значения фильтра они выпадают из запроса.
+DATES = """
+WHERE true
+  [[AND date >= {{date_from}}]]
+  [[AND date <= {{date_to}}]]
 """
 
 # (name, display, sql, visualization_settings)
@@ -50,43 +48,42 @@ CARDS = {
     "events": (
         "События",
         "scalar",
-        f"SELECT count(DISTINCT id) AS events {SRC}",
+        f"SELECT sum(events) AS events FROM dm.fct_day_earthquake {DATES}",
         {},
     ),
     "avg_mag": (
         "Средняя магнитуда",
         "scalar",
-        f"SELECT round(avg(mag::float)::numeric, 2) AS avg_magnitude {SRC}",
+        f"""
+        SELECT round((sum(avg_mag * events) / sum(events))::numeric, 2)
+            AS avg_magnitude
+        FROM dm.fct_day_earthquake {DATES}
+        """,
         {},
     ),
     "max_mag": (
         "Максимальная магнитуда",
         "scalar",
-        f"SELECT max(mag::float) AS max_magnitude {SRC}",
+        f"SELECT max(max_mag) AS max_magnitude FROM dm.fct_day_earthquake {DATES}",
         {},
     ),
     "m5": (
         "Сильные события (M5+)",
         "scalar",
-        f"SELECT count(DISTINCT id) AS m5_plus {SRC} AND mag::float >= 5",
+        f"SELECT sum(m5_events) AS m5_plus FROM dm.fct_day_earthquake {DATES}",
         {},
     ),
     "daily_events": (
         "События по дням и скользящее среднее за 7 дней",
         "combo",
         f"""
-        WITH daily AS (
-            SELECT left(time, 10)::date AS day, count(DISTINCT id) AS events
-            {SRC}
-            GROUP BY 1
-        )
         SELECT
-            day,
+            date AS day,
             events,
-            round(avg(events) OVER (ORDER BY day ROWS 6 PRECEDING), 1)
+            round(avg(events) OVER (ORDER BY date ROWS 6 PRECEDING), 1)
                 AS events_7d_avg
-        FROM daily
-        ORDER BY day
+        FROM dm.fct_day_earthquake {DATES}
+        ORDER BY date
         """,
         {
             "graph.dimensions": ["day"],
@@ -102,12 +99,11 @@ CARDS = {
         "line",
         f"""
         SELECT
-            left(time, 10)::date AS day,
-            round(avg(mag::float)::numeric, 2) AS avg_magnitude,
-            max(mag::float) AS max_magnitude
-        {SRC}
-        GROUP BY 1
-        ORDER BY 1
+            date AS day,
+            round(avg_mag::numeric, 2) AS avg_magnitude,
+            max_mag AS max_magnitude
+        FROM dm.fct_day_earthquake {DATES}
+        ORDER BY date
         """,
         {
             "graph.dimensions": ["day"],
@@ -118,23 +114,20 @@ CARDS = {
         "Распределение по магнитуде",
         "bar",
         f"""
-        SELECT band, events FROM (
-            SELECT
-                CASE
-                    WHEN mag::float < 1 THEN '< 1'
-                    WHEN mag::float < 2 THEN '1–2'
-                    WHEN mag::float < 3 THEN '2–3'
-                    WHEN mag::float < 4 THEN '3–4'
-                    WHEN mag::float < 5 THEN '4–5'
-                    WHEN mag::float < 6 THEN '5–6'
-                    ELSE '6+'
-                END AS band,
-                least(floor(greatest(mag::float, 0)), 6) AS sort_key,
-                count(DISTINCT id) AS events
-            {SRC}
-            GROUP BY 1, 2
-        ) t
-        ORDER BY sort_key
+        SELECT
+            CASE mag_floor
+                WHEN 0 THEN '< 1'
+                WHEN 1 THEN '1–2'
+                WHEN 2 THEN '2–3'
+                WHEN 3 THEN '3–4'
+                WHEN 4 THEN '4–5'
+                WHEN 5 THEN '5–6'
+                ELSE '6+'
+            END AS band,
+            sum(events) AS events
+        FROM dm.fct_class_day_earthquake {DATES}
+        GROUP BY mag_floor
+        ORDER BY mag_floor
         """,
         {"graph.dimensions": ["band"], "graph.metrics": ["events"]},
     ),
@@ -143,33 +136,25 @@ CARDS = {
         "pie",
         f"""
         SELECT
-            CASE
-                WHEN depth::float < 70 THEN 'Неглубокие (< 70 км)'
-                WHEN depth::float < 300 THEN 'Промежуточные (70–300 км)'
+            CASE depth_class
+                WHEN 'shallow' THEN 'Неглубокие (< 70 км)'
+                WHEN 'intermediate' THEN 'Промежуточные (70–300 км)'
                 ELSE 'Глубокие (> 300 км)'
             END AS depth_class,
-            count(DISTINCT id) AS events
-        {SRC}
-          AND NULLIF(depth, '') IS NOT NULL
-        GROUP BY 1
+            sum(events) AS events
+        FROM dm.fct_class_day_earthquake {DATES}
+        GROUP BY depth_class
         ORDER BY 2 DESC
         """,
         {"pie.dimension": "depth_class", "pie.metric": "events"},
     ),
-    # Каталог USGS полон слабых событий в США (плотная сеть станций), поэтому
-    # без порога рейтинг состоит из американских штатов. M4.5+ — порог, выше
-    # которого каталог полон по всему миру.
     "regions": (
         "Топ-10 регионов мира (события M4.5+)",
         "row",
         f"""
-        SELECT
-            trim(regexp_replace(place, '^.*,', '')) AS region,
-            count(DISTINCT id) AS events
-        {SRC}
-          AND NULLIF(place, '') IS NOT NULL
-          AND mag::float >= 4.5
-        GROUP BY 1
+        SELECT region, sum(events_m45) AS events
+        FROM dm.fct_region_day_earthquake {DATES}
+        GROUP BY region
         ORDER BY 2 DESC
         LIMIT 10
         """,
@@ -180,12 +165,12 @@ CARDS = {
         "table",
         f"""
         SELECT
-            replace(left(time, 19), 'T', ' ') AS time_utc,
-            mag::float AS magnitude,
+            event_time AS time_utc,
+            mag AS magnitude,
             place,
-            round(NULLIF(depth, '')::float::numeric, 1) AS depth_km
-        {SRC}
-        ORDER BY mag::float DESC, time DESC
+            round(depth_km::numeric, 1) AS depth_km
+        FROM dm.fct_event_earthquake {DATES}
+        ORDER BY mag DESC, event_time DESC
         LIMIT 15
         """,
         {},
@@ -194,16 +179,9 @@ CARDS = {
         "Карта событий M3+ (до 2000 сильнейших)",
         "map",
         f"""
-        SELECT
-            latitude::float AS latitude,
-            longitude::float AS longitude,
-            mag::float AS magnitude,
-            place
-        {SRC}
-          AND mag::float >= 3
-          AND NULLIF(latitude, '') IS NOT NULL
-          AND NULLIF(longitude, '') IS NOT NULL
-        ORDER BY mag::float DESC
+        SELECT latitude, longitude, mag AS magnitude, place
+        FROM dm.fct_event_earthquake {DATES}
+        ORDER BY mag DESC
         LIMIT 2000
         """,
         {
@@ -217,16 +195,10 @@ CARDS = {
         "Карта сильных событий (M5+)",
         "map",
         f"""
-        SELECT
-            latitude::float AS latitude,
-            longitude::float AS longitude,
-            mag::float AS magnitude,
-            place
-        {SRC}
-          AND mag::float >= 5
-          AND NULLIF(latitude, '') IS NOT NULL
-          AND NULLIF(longitude, '') IS NOT NULL
-        ORDER BY mag::float DESC
+        SELECT latitude, longitude, mag AS magnitude, place
+        FROM dm.fct_event_earthquake {DATES}
+          AND mag >= 5
+        ORDER BY mag DESC
         LIMIT 2000
         """,
         {
@@ -383,6 +355,11 @@ def main():
             existing, name, display, sql, viz, db_id, collection_id
         )
         print(f"Карточка: {name}")
+
+    for name, card_id in existing.items():
+        if name not in {c[0] for c in CARDS.values()}:
+            mb.call("PUT", f"/card/{card_id}", {"archived": True})
+            print(f"Архивирована лишняя карточка: {name}")
 
     mappings = lambda card_id: [  # noqa: E731
         {

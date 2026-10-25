@@ -25,9 +25,9 @@ flowchart LR
     RAW -->|Parquet| MINIO[(MinIO / prod)]
     MINIO --> ODS_DAG[raw_from_s3_to_pg]
     ODS_DAG --> ODS[(PostgreSQL / ods)]
-    ODS --> MB[Metabase]
-    ODS --> FCT["fct_count_day_earthquake<br/>fct_avg_day_earthquake"]
-    FCT --> DM[(PostgreSQL / dm)]
+    ODS --> DM_DAGS["fct_day, fct_class_day,<br/>fct_region_day, fct_event"]
+    DM_DAGS --> DM[(PostgreSQL / dm)]
+    DM --> MB[Metabase]
 ```
 
 DuckDB используется внутри Python-задач Airflow для чтения CSV/Parquet и
@@ -43,8 +43,10 @@ DuckDB используется внутри Python-задач Airflow для ч
 |---|---|---|
 | RAW | `s3://prod/raw/earthquake/<date>/...parquet` | Снимок ответа USGS за один день |
 | ODS | `ods.fct_earthquake` | Детальные события без агрегации |
-| DM | `dm.fct_count_day_earthquake` | Количество событий по дням |
-| DM | `dm.fct_avg_day_earthquake` | Средняя магнитуда по дням |
+| DM | `dm.fct_day_earthquake` | События, средняя и максимальная магнитуда, число M5+ по дням |
+| DM | `dm.fct_class_day_earthquake` | События по магнитуде и классу глубины по дням |
+| DM | `dm.fct_region_day_earthquake` | События M4.5+ по регионам и дням |
+| DM | `dm.fct_event_earthquake` | События M3+ с типизированными колонками для карт |
 | STG | `stg.tmp_*` | Временные таблицы для пересчёта одного дня |
 
 ## DAG-и
@@ -57,8 +59,7 @@ DAG.
 |---|---|---|
 | `raw_from_api_to_s3` | — | Запрашивает CSV из USGS и сохраняет Parquet в MinIO |
 | `raw_from_s3_to_pg` | `raw_from_api_to_s3` | Загружает Parquet в `ods.fct_earthquake` |
-| `fct_count_day_earthquake` | `raw_from_s3_to_pg` | Заполняет витрину количества событий |
-| `fct_avg_day_earthquake` | `raw_from_s3_to_pg` | Заполняет витрину средней магнитуды |
+| `fct_day_earthquake`, `fct_class_day_earthquake`, `fct_region_day_earthquake`, `fct_event_earthquake` | `raw_from_s3_to_pg` | Пересчитывают витрины `dm` за день из ODS (только `type = 'earthquake'`) |
 
 Зависимые DAG-и используют `ExternalTaskSensor` и ожидают успешный upstream-run
 с той же logical date. Поэтому расписание, часовой пояс и `start_date` у всей
@@ -146,8 +147,10 @@ $AF dags list-import-errors
 ```bash
 docker compose exec -T airflow-scheduler airflow dags unpause raw_from_api_to_s3
 docker compose exec -T airflow-scheduler airflow dags unpause raw_from_s3_to_pg
-docker compose exec -T airflow-scheduler airflow dags unpause fct_count_day_earthquake
-docker compose exec -T airflow-scheduler airflow dags unpause fct_avg_day_earthquake
+docker compose exec -T airflow-scheduler airflow dags unpause fct_day_earthquake
+docker compose exec -T airflow-scheduler airflow dags unpause fct_class_day_earthquake
+docker compose exec -T airflow-scheduler airflow dags unpause fct_region_day_earthquake
+docker compose exec -T airflow-scheduler airflow dags unpause fct_event_earthquake
 ```
 
 При `catchup=True` Airflow создаст дневные запуски от `start_date` до текущей
@@ -158,8 +161,8 @@ docker compose exec -T airflow-scheduler airflow dags unpause fct_avg_day_earthq
 ## Дашборд в Metabase
 
 Скрипт `metabase/provision_dashboard.py` создаёт подключение к DWH, коллекцию
-«Землетрясения» и дашборд «Землетрясения: обзор». Карточки читают
-`ods.fct_earthquake` (только `type = 'earthquake'`):
+«Землетрясения» и дашборд «Землетрясения: обзор». Карточки читают только
+витрины `dm`:
 
 - KPI: число событий, средняя и максимальная магнитуда, число событий M5+;
 - события по дням со скользящим средним за 7 дней;
@@ -177,7 +180,8 @@ MB_EMAIL=admin@example.com MB_PASSWORD='change-me-please' \
 ```
 
 Если Metabase ещё не настроен, скрипт создаст администратора с этими
-учётными данными. Повторный запуск обновляет существующие карточки и дашборд.
+учётными данными. Повторный запуск обновляет существующие карточки и дашборд и
+архивирует карточки коллекции, которых больше нет в скрипте.
 Адрес Metabase и параметры DWH переопределяются переменными `MB_URL`,
 `DWH_HOST`, `DWH_PORT`, `DWH_DB`, `DWH_USER`, `DWH_PASSWORD`.
 
@@ -193,8 +197,11 @@ MB_EMAIL=admin@example.com MB_PASSWORD='change-me-please' \
 ├── dags/
 │   ├── raw_from_api_to_s3.py
 │   ├── raw_from_s3_to_pg.py
-│   ├── fct_count_day_earthquake.py
-│   └── fct_avg_day_earthquake.py
+│   ├── dm_factory.py          # общий шаблон DAG витрин
+│   ├── fct_day_earthquake.py
+│   ├── fct_class_day_earthquake.py
+│   ├── fct_region_day_earthquake.py
+│   └── fct_event_earthquake.py
 ├── data/                  # локальные данные MinIO
 ├── docs/                  # эксплуатация и скриншоты
 ├── metabase/              # образ Metabase и скрипт дашборда

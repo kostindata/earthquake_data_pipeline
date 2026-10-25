@@ -19,8 +19,8 @@ docker compose exec -T postgres_dwh psql -U postgres -d postgres -c \
 
 ```bash
 docker compose exec -T postgres_dwh psql -U postgres -d postgres -c \
-  "SELECT date, count
-     FROM dm.fct_count_day_earthquake
+  "SELECT date, events, round(avg_mag::numeric, 2) AS avg_mag, max_mag
+     FROM dm.fct_day_earthquake
     ORDER BY date DESC
     LIMIT 10;"
 ```
@@ -31,14 +31,15 @@ docker compose exec -T postgres_dwh psql -U postgres -d postgres -c \
 SELECT
     ods.date,
     ods.event_count AS ods_count,
-    dm.count AS dm_count
+    dm.events AS dm_count
 FROM (
-    SELECT time::date AS date, count(*) AS event_count
+    SELECT left(time, 10)::date AS date, count(DISTINCT id) AS event_count
     FROM ods.fct_earthquake
+    WHERE type = 'earthquake' AND NULLIF(mag, '') IS NOT NULL
     GROUP BY 1
 ) AS ods
-FULL JOIN dm.fct_count_day_earthquake AS dm USING (date)
-WHERE ods.event_count IS DISTINCT FROM dm.count
+FULL JOIN dm.fct_day_earthquake AS dm USING (date)
+WHERE ods.event_count IS DISTINCT FROM dm.events
 ORDER BY date;
 ```
 
@@ -48,19 +49,17 @@ ORDER BY date;
 
 ### В ODS данные есть, нужно пересчитать только DM
 
-Очистите task instances нужного DAG за выбранный диапазон. Airflow выполнит их
-повторно:
+Очистите task instances нужного DM DAG (`fct_day_earthquake`,
+`fct_class_day_earthquake`, `fct_region_day_earthquake` или
+`fct_event_earthquake`) за выбранный диапазон. Airflow выполнит их повторно:
 
 ```bash
 docker compose exec -T airflow-scheduler \
-  airflow tasks clear fct_count_day_earthquake \
+  airflow tasks clear fct_day_earthquake \
   --start-date 2026-06-01 \
   --end-date 2026-06-10 \
   --yes
 ```
-
-Для витрины средней магнитуды замените DAG ID на
-`fct_avg_day_earthquake`.
 
 ### В ODS отсутствуют даты, но файлы есть в MinIO
 
@@ -131,7 +130,7 @@ docker compose exec -T airflow-scheduler \
   airflow dags list-runs -d raw_from_s3_to_pg
 
 docker compose exec -T airflow-scheduler \
-  airflow dags list-runs -d fct_count_day_earthquake
+  airflow dags list-runs -d fct_day_earthquake
 ```
 
 ### Ошибка импорта DAG

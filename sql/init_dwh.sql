@@ -27,12 +27,35 @@ CREATE TABLE IF NOT EXISTS ods.fct_earthquake (
     mag_source       varchar
 );
 
-CREATE TABLE IF NOT EXISTS dm.fct_count_day_earthquake (
-    date  date,
-    count bigint
+CREATE TABLE IF NOT EXISTS dm.fct_day_earthquake (
+    date      date,
+    events    bigint,
+    avg_mag   double precision,
+    max_mag   double precision,
+    m5_events bigint
 );
 
-CREATE TABLE IF NOT EXISTS dm.fct_avg_day_earthquake (
-    date date,
-    avg  double precision
+CREATE TABLE IF NOT EXISTS dm.fct_class_day_earthquake (
+    date        date,
+    mag_floor   smallint,
+    depth_class varchar,
+    events      bigint
+);
+
+CREATE TABLE IF NOT EXISTS dm.fct_region_day_earthquake (
+    date       date,
+    region     varchar,
+    events_m45 bigint
+);
+
+CREATE TABLE IF NOT EXISTS dm.fct_event_earthquake (
+    date       date,
+    id         varchar,
+    event_time timestamp,
+    latitude   double precision,
+    longitude  double precision,
+    depth_km   double precision,
+    mag        double precision,
+    place      varchar,
+    region     varchar
 );
