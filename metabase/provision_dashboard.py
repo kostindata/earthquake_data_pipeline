@@ -156,8 +156,11 @@ CARDS = {
         """,
         {"pie.dimension": "depth_class", "pie.metric": "events"},
     ),
+    # Каталог USGS полон слабых событий в США (плотная сеть станций), поэтому
+    # без порога рейтинг состоит из американских штатов. M4.5+ — порог, выше
+    # которого каталог полон по всему миру.
     "regions": (
-        "Топ-10 регионов по числу событий",
+        "Топ-10 регионов мира (события M4.5+)",
         "row",
         f"""
         SELECT
@@ -165,6 +168,7 @@ CARDS = {
             count(DISTINCT id) AS events
         {SRC}
           AND NULLIF(place, '') IS NOT NULL
+          AND mag::float >= 4.5
         GROUP BY 1
         ORDER BY 2 DESC
         LIMIT 10
@@ -204,6 +208,30 @@ CARDS = {
         """,
         {
             "map.type": "pin",
+            "map.pin_type": "tiles",
+            "map.latitude_column": "latitude",
+            "map.longitude_column": "longitude",
+        },
+    ),
+    "map_m5": (
+        "Карта сильных событий (M5+)",
+        "map",
+        f"""
+        SELECT
+            latitude::float AS latitude,
+            longitude::float AS longitude,
+            mag::float AS magnitude,
+            place
+        {SRC}
+          AND mag::float >= 5
+          AND NULLIF(latitude, '') IS NOT NULL
+          AND NULLIF(longitude, '') IS NOT NULL
+        ORDER BY mag::float DESC
+        LIMIT 2000
+        """,
+        {
+            "map.type": "pin",
+            "map.pin_type": "tiles",
             "map.latitude_column": "latitude",
             "map.longitude_column": "longitude",
         },
@@ -223,6 +251,7 @@ LAYOUT = [
     ("regions", 22, 0, 12, 8),
     ("strongest", 22, 12, 12, 8),
     ("map", 30, 0, 24, 10),
+    ("map_m5", 40, 0, 24, 10),
 ]
 
 PARAMETERS = [
@@ -236,7 +265,7 @@ class Metabase:
         self.url = url
         self.session = None
 
-    def call(self, method, path, body=None, auth=True):
+    def call(self, method, path, body=None, auth=True, allow=()):
         headers = {"Content-Type": "application/json"}
         if auth and self.session:
             headers["X-Metabase-Session"] = self.session
@@ -248,6 +277,8 @@ class Metabase:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
+            if e.code in allow:
+                return None
             sys.exit(f"{method} {path} -> HTTP {e.code}: {e.read().decode()[:500]}")
         except urllib.error.URLError as e:
             sys.exit(f"Metabase недоступен по адресу {self.url}: {e.reason}")
@@ -258,6 +289,8 @@ class Metabase:
         token = props.get("setup-token")
         if token:
             print("Metabase не настроен: создаю администратора")
+            # 403 — пользователь уже есть (мастер настройки не завершён):
+            # просто входим под ним
             self.call(
                 "POST",
                 "/setup",
@@ -272,6 +305,7 @@ class Metabase:
                     "prefs": {"site_name": "Earthquakes", "allow_tracking": False},
                 },
                 auth=False,
+                allow=(403,),
             )
         res = self.call(
             "POST", "/session", {"username": email, "password": password}, auth=False
